@@ -1,5 +1,5 @@
 [package]
-name = "log_warning"
+name = "warning_logger"
 version = "0.1.0"
 edition = "2024"
 description = "A small library for logging warnings with multiple layers of context"

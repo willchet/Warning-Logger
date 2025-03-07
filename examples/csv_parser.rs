@@ -1,9 +1,9 @@
 #![feature(iter_intersperse)]
 
 use anyhow::{Context, Result, anyhow};
-use log_warning::*;
 use std::fs::File;
 use std::io::BufRead;
+use warning_logger::*;
 
 #[derive(Debug)]
 struct Record {
