@@ -596,7 +596,7 @@ impl<I, T, W> LogWarnings for I where I: Iterator<Item = Logger<T, W>> {}
 pub trait SendWarnings: ParallelIterator {
     /// Relogs all warnings in an iterator, unwrapping each [`Logger`].
     #[inline]
-    fn send_warnings<S, T, W>(
+    fn send_warnings<T, W>(
         self,
         tx: &Sender<String>,
     ) -> rayon::iter::Map<Self, impl Fn(Logger<T, W>) -> T + Sync + Send>
@@ -611,7 +611,7 @@ pub trait SendWarnings: ParallelIterator {
     /// Relogs all warnings in an iterator with a context applied, unwrapping
     /// each [`Logger`]. The warnings appear indented beneath the context.
     #[inline]
-    fn send_warnings_with_context<S, T: Send, W: Warnings, C: Display>(
+    fn send_warnings_with_context<T: Send, W: Warnings, C: Display>(
         self,
         tx: &Sender<String>,
         context: impl Fn() -> C + Send + Sync,
