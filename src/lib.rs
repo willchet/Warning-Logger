@@ -616,6 +616,8 @@ pub trait SendWarnings: ParallelIterator {
     }
 }
 
+impl<I, T, W> SendWarnings for I where I: ParallelIterator<Item = Logger<T, W>> {}
+
 /// A fallible version of [`FromIterator`], where any item that fails generates
 /// a warning in the [`Logger`].
 pub trait FromIteratorWithWarnings<A, W>: Sized {
