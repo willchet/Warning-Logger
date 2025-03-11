@@ -1,4 +1,4 @@
-#![feature(iter_intersperse, let_chains, min_specialization)]
+#![feature(iter_intersperse, let_chains)]
 
 use anyhow::{Result, anyhow};
 use std::{
@@ -6,6 +6,7 @@ use std::{
     fmt::Display,
     iter::{FilterMap, Map},
     rc::Rc,
+    sync::{Arc, Mutex},
 };
 
 #[macro_export]
@@ -169,6 +170,148 @@ impl<T> Logger<T> {
                 + &self
                     .warnings
                     .borrow()
+                    .iter()
+                    .map(|x| x.replace('\n', "\n|    "))
+                    .intersperse("\n|    ".to_string())
+                    .collect::<String>()
+        })
+    }
+}
+
+/// A struct wrapping any type which also holds any number of warnings.
+#[derive(Debug)]
+pub struct ALogger<T> {
+    value: T,
+    warnings: Arc<Mutex<Vec<String>>>,
+}
+
+impl<T, E> ALogger<Result<T, E>> {
+    /// Converts a [`ALogger`] of a [`Result`] to a [`Result`] of a [`ALogger`].
+    #[inline]
+    pub fn transpose(self) -> Result<ALogger<T>, E> {
+        Ok(ALogger {
+            value: self.value?,
+            warnings: self.warnings,
+        })
+    }
+}
+
+impl<T> ALogger<T> {
+    /// Wraps an existing value in a [`ALogger`] with no warnings.
+    #[inline]
+    pub fn new(value: T) -> Self {
+        Self {
+            value,
+            warnings: Arc::new(Mutex::new(vec![])),
+        }
+    }
+
+    /// Retrieves a reference to the value stored in the [`ALogger`].
+    #[inline]
+    pub fn val(&self) -> &T {
+        &self.value
+    }
+
+    /// Retrieves a mutable reference to the value stored in the [`ALogger`].
+    #[inline]
+    pub fn val_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+
+    /// Returns whether any warnings are being stored by the [`ALogger`].
+    #[inline]
+    pub fn has_warning(&self) -> bool {
+        !self.warnings.lock().unwrap().is_empty()
+    }
+
+    /// Adds a warning to the [`ALogger`].
+    #[inline]
+    pub fn log(&self, warning: impl Display) {
+        self.warnings.lock().unwrap().push(warning.to_string());
+    }
+
+    /// Adds a warning to the [`ALogger`] with a context applied. The warning
+    /// appears indented beneath the context.
+    #[inline]
+    pub fn log_with_context<C: Display>(&self, warning: impl Display, context: impl FnOnce() -> C) {
+        self.log(warning_with_context(warning, context));
+    }
+
+    /// Transforms the value stored in the [`ALogger`].
+    #[inline]
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> ALogger<U> {
+        ALogger {
+            value: f(self.value),
+            warnings: self.warnings,
+        }
+    }
+
+    /// Applies a context to the currently logged warnings. The warnings appear
+    /// indented beneath the context.
+    #[inline]
+    pub fn with_context<C: Display>(mut self, context: impl FnOnce() -> C) -> Self {
+        if let Some(warning) = self.with_context_helper(context) {
+            self.warnings = Arc::new(Mutex::new(vec![warning]));
+        }
+        self
+    }
+
+    /// Unwraps the value of a logger, taking its warnings and logging them in a
+    /// new logger.
+    #[inline]
+    pub fn relog<S>(self, logger: &Logger<S>) -> T {
+        for warning in self.warnings.lock().unwrap().iter() {
+            logger.log(warning);
+        }
+        self.value
+    }
+
+    /// Unwraps the value of a log, taking its warnings and logging them in a
+    /// new log with a context applied. The warnings appear indented beneath
+    /// the context.
+    #[inline]
+    pub fn relog_with_context<S, C: Display>(
+        self,
+        context: impl FnOnce() -> C,
+        logger: &Logger<S>,
+    ) -> T {
+        if let Some(warning) = self.with_context_helper(context) {
+            logger.log(warning)
+        }
+        self.value
+    }
+
+    /// Unwraps the value of a log, printing its warnings.
+    #[inline]
+    pub fn print_warnings(self) -> T {
+        for warning in self.warnings.lock().unwrap().iter() {
+            eprintln!("{warning}");
+        }
+        self.value
+    }
+
+    /// Unwraps the value of a log, printing its warnings with a context
+    /// applied. The warnings appear indented beneath the context.
+    #[inline]
+    pub fn print_warnings_with_context<C: Display>(self, context: impl FnOnce() -> C) -> T {
+        if let Some(warning) = self.with_context_helper(context) {
+            eprintln!("{warning}");
+        }
+        self.value
+    }
+
+    /// Retrieves the warnings with a context applied. The warnings appear
+    /// indented beneath the context. If no warnings are present, then `None` is
+    /// returned.
+    #[inline]
+    fn with_context_helper<C: Display>(&self, context: impl FnOnce() -> C) -> Option<String> {
+        self.has_warning().then(|| {
+            context().to_string()
+                + "\n|    "
+                + &self
+                    .warnings
+                    .lock()
+                    .unwrap()
                     .iter()
                     .map(|x| x.replace('\n', "\n|    "))
                     .intersperse("\n|    ".to_string())
