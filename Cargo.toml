@@ -6,3 +6,4 @@ description = "A small library for logging warnings with multiple layers of cont
 
 [dependencies]
 anyhow = "1.0.97"
+rayon = "1.10.0"

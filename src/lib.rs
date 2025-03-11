@@ -1,6 +1,7 @@
 #![feature(iter_intersperse, let_chains)]
 
 use anyhow::{Result, anyhow};
+use rayon::iter::ParallelIterator;
 use std::{
     cell::{Ref, RefCell, RefMut},
     fmt::Display,
@@ -522,36 +523,37 @@ pub trait LogWarnings: Iterator {
     {
         self.into_iter().map(move |item| item.print_warnings())
     }
+}
 
+impl<I, T, W> LogWarnings for I where I: Iterator<Item = Logger<T, W>> {}
+
+pub trait SendWarnings: ParallelIterator {
     /// Relogs all warnings in an iterator, unwrapping each [`Logger`].
     #[inline]
-    fn send_warnings<S, T, W: Warnings>(
+    fn send_warnings<S, T: Send, W: Warnings>(
         self,
         tx: &Sender<String>,
-    ) -> Map<Self, impl FnMut(Logger<T, W>) -> T>
+    ) -> rayon::iter::Map<Self, impl FnMut(Logger<T, W>) -> T>
     where
-        Self: Sized + Iterator<Item = Logger<T, W>>,
+        Self: Sized + ParallelIterator<Item = Logger<T, W>>,
     {
-        self.into_iter().map(move |item| item.send(tx))
+        self.map(move |item| item.send(tx))
     }
 
     /// Relogs all warnings in an iterator with a context applied, unwrapping
     /// each [`Logger`]. The warnings appear indented beneath the context.
     #[inline]
-    fn send_warnings_with_context<S, T, W: Warnings, C: Display>(
+    fn send_warnings_with_context<S, T: Send, W: Warnings, C: Display>(
         self,
         tx: &Sender<String>,
-        context: impl Fn() -> C,
-    ) -> Map<Self, impl FnMut(Logger<T, W>) -> T>
+        context: impl Fn() -> C + Send + Sync,
+    ) -> rayon::iter::Map<Self, impl FnMut(Logger<T, W>) -> T>
     where
-        Self: Sized + Iterator<Item = Logger<T, W>>,
+        Self: Sized + ParallelIterator<Item = Logger<T, W>>,
     {
-        self.into_iter()
-            .map(move |item| item.send_with_context(&context, tx))
+        self.map(move |item| item.send_with_context(&context, tx))
     }
 }
-
-impl<I, T, W> LogWarnings for I where I: Iterator<Item = Logger<T, W>> {}
 
 /// A fallible version of [`FromIterator`], where any item that fails generates
 /// a warning in the [`Logger`].
