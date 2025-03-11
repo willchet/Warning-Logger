@@ -2,13 +2,13 @@
 
 use anyhow::{Result, anyhow};
 use std::{
-    cell::RefCell,
+    cell::{Ref, RefCell, RefMut},
     fmt::Display,
     iter::{FilterMap, Map},
+    ops::{Deref, DerefMut},
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
-
 #[macro_export]
 macro_rules! context {
     ($msg:expr) => {
@@ -22,7 +22,10 @@ macro_rules! context {
 /// Apply a context to a given warning. The warning becomes indented beneath the
 /// context.
 #[inline]
-fn warning_with_context<E: Display, C: Display>(warning: E, context: impl FnOnce() -> C) -> String {
+pub(crate) fn warning_with_context<E: Display, C: Display>(
+    warning: E,
+    context: impl FnOnce() -> C,
+) -> String {
     format!(
         "{}\n|    {}",
         context(),
@@ -33,21 +36,99 @@ fn warning_with_context<E: Display, C: Display>(warning: E, context: impl FnOnce
 /// Print a warning with a given context applied. The warning becomes indented
 /// beneath the context.
 #[inline]
-fn print_warning_with_context<E: Display, C: Display>(warning: E, context: impl FnOnce() -> C) {
+pub(crate) fn print_warning_with_context<E: Display, C: Display>(
+    warning: E,
+    context: impl FnOnce() -> C,
+) {
     eprintln!("{}", warning_with_context(warning, context));
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+use sealed::Sealed;
+
+pub trait Warnings: Sealed {
+    type BorrowedVec<'a>: Deref<Target = Vec<String>>
+    where
+        Self: 'a;
+    type BorrowedMutVec<'a>: DerefMut<Target = Vec<String>>
+    where
+        Self: 'a;
+
+    fn new() -> Self;
+    fn new_with(warnings: Vec<String>) -> Self;
+    fn borrow_vec(&self) -> Self::BorrowedVec<'_>;
+    fn borrow_mut_vec(&self) -> Self::BorrowedMutVec<'_>;
+}
+
+impl Sealed for Rc<RefCell<Vec<String>>> {}
+
+impl Warnings for Rc<RefCell<Vec<String>>> {
+    type BorrowedVec<'a> = Ref<'a, Vec<String>>;
+    type BorrowedMutVec<'a> = RefMut<'a, Vec<String>>;
+
+    #[inline]
+    fn new() -> Self {
+        Rc::new(RefCell::new(vec![]))
+    }
+
+    #[inline]
+    fn new_with(warnings: Vec<String>) -> Self {
+        Rc::new(RefCell::new(warnings))
+    }
+
+    #[inline]
+    fn borrow_vec(&self) -> Ref<'_, Vec<String>> {
+        self.borrow()
+    }
+
+    #[inline]
+    fn borrow_mut_vec(&self) -> RefMut<'_, Vec<String>> {
+        self.borrow_mut()
+    }
+}
+
+impl Sealed for Arc<Mutex<Vec<String>>> {}
+
+impl Warnings for Arc<Mutex<Vec<String>>> {
+    type BorrowedVec<'a> = MutexGuard<'a, Vec<String>>;
+    type BorrowedMutVec<'a> = MutexGuard<'a, Vec<String>>;
+
+    #[inline]
+    fn new() -> Self {
+        Arc::new(Mutex::new(vec![]))
+    }
+
+    #[inline]
+    fn new_with(warnings: Vec<String>) -> Self {
+        Arc::new(Mutex::new(warnings))
+    }
+
+    #[inline]
+    fn borrow_vec(&self) -> MutexGuard<'_, Vec<String>> {
+        self.lock().unwrap()
+    }
+
+    #[inline]
+    fn borrow_mut_vec(&self) -> MutexGuard<'_, Vec<String>> {
+        self.lock().unwrap()
+    }
 }
 
 /// A struct wrapping any type which also holds any number of warnings.
 #[derive(Debug)]
-pub struct Logger<T> {
+pub struct Logger<T, W = Rc<RefCell<Vec<String>>>> {
     value: T,
-    warnings: Rc<RefCell<Vec<String>>>,
+    warnings: W,
 }
 
-impl<T, E> Logger<Result<T, E>> {
+pub type AtomicLogger<T> = Logger<T, Arc<Mutex<Vec<String>>>>;
+
+impl<T, E, W: Warnings> Logger<Result<T, E>, W> {
     /// Converts a [`Logger`] of a [`Result`] to a [`Result`] of a [`Logger`].
     #[inline]
-    pub fn transpose(self) -> Result<Logger<T>, E> {
+    pub fn transpose(self) -> Result<Logger<T, W>, E> {
         Ok(Logger {
             value: self.value?,
             warnings: self.warnings,
@@ -55,16 +136,7 @@ impl<T, E> Logger<Result<T, E>> {
     }
 }
 
-impl<T> Logger<T> {
-    /// Wraps an existing value in a [`Logger`] with no warnings.
-    #[inline]
-    pub fn new(value: T) -> Self {
-        Self {
-            value,
-            warnings: Rc::new(RefCell::new(vec![])),
-        }
-    }
-
+impl<T, W> Logger<T, W> {
     /// Retrieves a reference to the value stored in the [`Logger`].
     #[inline]
     pub fn val(&self) -> &T {
@@ -76,17 +148,28 @@ impl<T> Logger<T> {
     pub fn val_mut(&mut self) -> &mut T {
         &mut self.value
     }
+}
+
+impl<T, W: Warnings> Logger<T, W> {
+    /// Wraps an existing value in a [`Logger`] with no warnings.
+    #[inline]
+    pub fn new(value: T) -> Self {
+        Self {
+            value,
+            warnings: W::new(),
+        }
+    }
 
     /// Returns whether any warnings are being stored by the [`Logger`].
     #[inline]
     pub fn has_warning(&self) -> bool {
-        !self.warnings.borrow().is_empty()
+        !self.warnings.borrow_vec().is_empty()
     }
 
     /// Adds a warning to the [`Logger`].
     #[inline]
     pub fn log(&self, warning: impl Display) {
-        self.warnings.borrow_mut().push(warning.to_string());
+        self.warnings.borrow_mut_vec().push(warning.to_string());
     }
 
     /// Adds a warning to the [`Logger`] with a context applied. The warning
@@ -98,7 +181,7 @@ impl<T> Logger<T> {
 
     /// Transforms the value stored in the [`Logger`].
     #[inline]
-    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Logger<U> {
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Logger<U, W> {
         Logger {
             value: f(self.value),
             warnings: self.warnings,
@@ -110,29 +193,29 @@ impl<T> Logger<T> {
     #[inline]
     pub fn with_context<C: Display>(mut self, context: impl FnOnce() -> C) -> Self {
         if let Some(warning) = self.with_context_helper(context) {
-            self.warnings = Rc::new(RefCell::new(vec![warning]));
+            self.warnings = W::new_with(vec![warning]);
         }
         self
     }
 
-    /// Unwraps the value of a logger, taking its warnings and logging them in a
-    /// new logger.
+    /// Unwraps the value of a [`Logger`], taking its warnings and logging them
+    /// in a new [`Logger`].
     #[inline]
-    pub fn relog<S>(self, logger: &Logger<S>) -> T {
-        for warning in self.warnings.borrow().iter() {
+    pub fn relog<S>(self, logger: &Logger<S, W>) -> T {
+        for warning in self.warnings.borrow_vec().iter() {
             logger.log(warning);
         }
         self.value
     }
 
-    /// Unwraps the value of a log, taking its warnings and logging them in a
-    /// new log with a context applied. The warnings appear indented beneath
-    /// the context.
+    /// Unwraps the value of a [`Logger`], taking its warnings and logging them
+    /// in a new [`Logger`] with a context applied. The warnings appear indented
+    /// beneath the context.
     #[inline]
     pub fn relog_with_context<S, C: Display>(
         self,
         context: impl FnOnce() -> C,
-        logger: &Logger<S>,
+        logger: &Logger<S, W>,
     ) -> T {
         if let Some(warning) = self.with_context_helper(context) {
             logger.log(warning)
@@ -140,16 +223,16 @@ impl<T> Logger<T> {
         self.value
     }
 
-    /// Unwraps the value of a log, printing its warnings.
+    /// Unwraps the value of a [`Logger`], printing its warnings.
     #[inline]
     pub fn print_warnings(self) -> T {
-        for warning in self.warnings.borrow().iter() {
+        for warning in self.warnings.borrow_vec().iter() {
             eprintln!("{warning}");
         }
         self.value
     }
 
-    /// Unwraps the value of a log, printing its warnings with a context
+    /// Unwraps the value of a [`Logger`], printing its warnings with a context
     /// applied. The warnings appear indented beneath the context.
     #[inline]
     pub fn print_warnings_with_context<C: Display>(self, context: impl FnOnce() -> C) -> T {
@@ -169,149 +252,7 @@ impl<T> Logger<T> {
                 + "\n|    "
                 + &self
                     .warnings
-                    .borrow()
-                    .iter()
-                    .map(|x| x.replace('\n', "\n|    "))
-                    .intersperse("\n|    ".to_string())
-                    .collect::<String>()
-        })
-    }
-}
-
-/// A struct wrapping any type which also holds any number of warnings.
-#[derive(Debug)]
-pub struct ALogger<T> {
-    value: T,
-    warnings: Arc<Mutex<Vec<String>>>,
-}
-
-impl<T, E> ALogger<Result<T, E>> {
-    /// Converts a [`ALogger`] of a [`Result`] to a [`Result`] of a [`ALogger`].
-    #[inline]
-    pub fn transpose(self) -> Result<ALogger<T>, E> {
-        Ok(ALogger {
-            value: self.value?,
-            warnings: self.warnings,
-        })
-    }
-}
-
-impl<T> ALogger<T> {
-    /// Wraps an existing value in a [`ALogger`] with no warnings.
-    #[inline]
-    pub fn new(value: T) -> Self {
-        Self {
-            value,
-            warnings: Arc::new(Mutex::new(vec![])),
-        }
-    }
-
-    /// Retrieves a reference to the value stored in the [`ALogger`].
-    #[inline]
-    pub fn val(&self) -> &T {
-        &self.value
-    }
-
-    /// Retrieves a mutable reference to the value stored in the [`ALogger`].
-    #[inline]
-    pub fn val_mut(&mut self) -> &mut T {
-        &mut self.value
-    }
-
-    /// Returns whether any warnings are being stored by the [`ALogger`].
-    #[inline]
-    pub fn has_warning(&self) -> bool {
-        !self.warnings.lock().unwrap().is_empty()
-    }
-
-    /// Adds a warning to the [`ALogger`].
-    #[inline]
-    pub fn log(&self, warning: impl Display) {
-        self.warnings.lock().unwrap().push(warning.to_string());
-    }
-
-    /// Adds a warning to the [`ALogger`] with a context applied. The warning
-    /// appears indented beneath the context.
-    #[inline]
-    pub fn log_with_context<C: Display>(&self, warning: impl Display, context: impl FnOnce() -> C) {
-        self.log(warning_with_context(warning, context));
-    }
-
-    /// Transforms the value stored in the [`ALogger`].
-    #[inline]
-    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> ALogger<U> {
-        ALogger {
-            value: f(self.value),
-            warnings: self.warnings,
-        }
-    }
-
-    /// Applies a context to the currently logged warnings. The warnings appear
-    /// indented beneath the context.
-    #[inline]
-    pub fn with_context<C: Display>(mut self, context: impl FnOnce() -> C) -> Self {
-        if let Some(warning) = self.with_context_helper(context) {
-            self.warnings = Arc::new(Mutex::new(vec![warning]));
-        }
-        self
-    }
-
-    /// Unwraps the value of a logger, taking its warnings and logging them in a
-    /// new logger.
-    #[inline]
-    pub fn relog<S>(self, logger: &Logger<S>) -> T {
-        for warning in self.warnings.lock().unwrap().iter() {
-            logger.log(warning);
-        }
-        self.value
-    }
-
-    /// Unwraps the value of a log, taking its warnings and logging them in a
-    /// new log with a context applied. The warnings appear indented beneath
-    /// the context.
-    #[inline]
-    pub fn relog_with_context<S, C: Display>(
-        self,
-        context: impl FnOnce() -> C,
-        logger: &Logger<S>,
-    ) -> T {
-        if let Some(warning) = self.with_context_helper(context) {
-            logger.log(warning)
-        }
-        self.value
-    }
-
-    /// Unwraps the value of a log, printing its warnings.
-    #[inline]
-    pub fn print_warnings(self) -> T {
-        for warning in self.warnings.lock().unwrap().iter() {
-            eprintln!("{warning}");
-        }
-        self.value
-    }
-
-    /// Unwraps the value of a log, printing its warnings with a context
-    /// applied. The warnings appear indented beneath the context.
-    #[inline]
-    pub fn print_warnings_with_context<C: Display>(self, context: impl FnOnce() -> C) -> T {
-        if let Some(warning) = self.with_context_helper(context) {
-            eprintln!("{warning}");
-        }
-        self.value
-    }
-
-    /// Retrieves the warnings with a context applied. The warnings appear
-    /// indented beneath the context. If no warnings are present, then `None` is
-    /// returned.
-    #[inline]
-    fn with_context_helper<C: Display>(&self, context: impl FnOnce() -> C) -> Option<String> {
-        self.has_warning().then(|| {
-            context().to_string()
-                + "\n|    "
-                + &self
-                    .warnings
-                    .lock()
-                    .unwrap()
+                    .borrow_vec()
                     .iter()
                     .map(|x| x.replace('\n', "\n|    "))
                     .intersperse("\n|    ".to_string())
@@ -322,29 +263,29 @@ impl<T> ALogger<T> {
 
 /// An extension trait for a result containing a [`Logger`] (i.e., a value
 /// wrapped with both warnings and a potential error).
-pub trait LoggerInResult<T, E> {
+pub trait LoggerInResult<T, E, W> {
     /// Applies a context to the [`Logger`], if there is no error. The warnings
     /// appear indented beneath the context.
     #[must_use]
     fn warnings_with_context<C: Display>(self, context: impl FnOnce() -> C) -> Self;
 
     /// Transforms the value stored in the [`Logger`] within the [`Result`].
-    fn map_val<U>(self, f: impl FnOnce(T) -> U) -> Result<Logger<U>, E>;
+    fn map_val<U>(self, f: impl FnOnce(T) -> U) -> Result<Logger<U, W>, E>;
 }
 
-impl<T, E> LoggerInResult<T, E> for Result<Logger<T>, E> {
+impl<T, E, W: Warnings> LoggerInResult<T, E, W> for Result<Logger<T, W>, E> {
     #[inline]
     fn warnings_with_context<C: Display>(mut self, context: impl FnOnce() -> C) -> Self {
         if let Ok(log) = &mut self
             && let Some(warning) = log.with_context_helper(context)
         {
-            log.warnings = Rc::new(RefCell::new(vec![warning]));
+            log.warnings = W::new_with(vec![warning]);
         }
         self
     }
 
     #[inline]
-    fn map_val<U>(self, f: impl FnOnce(T) -> U) -> Result<Logger<U>, E> {
+    fn map_val<U>(self, f: impl FnOnce(T) -> U) -> Result<Logger<U, W>, E> {
         self.map(|log| Logger {
             value: f(log.value),
             warnings: log.warnings,
@@ -353,18 +294,18 @@ impl<T, E> LoggerInResult<T, E> for Result<Logger<T>, E> {
 }
 
 /// An extension trait allowing any value to be wrapped into a [`Logger`].
-pub trait LoggingWrap: Sized {
+pub trait LoggingWrap<W: Warnings>: Sized {
     /// Wraps the value in a [`Logger`] with no warnings.
     #[inline]
     #[must_use]
-    fn wrap(self) -> Logger<Self> {
-        Logger::new(self)
+    fn wrap(self) -> Logger<Self, W> {
+        Logger::<Self, W>::new(self)
     }
 
     /// Wraps the value in a [`Logger`] with a set of warnings.
     #[inline]
     #[must_use]
-    fn wrap_with_warnings(self, warnings: Logger<()>) -> Logger<Self> {
+    fn wrap_with_warnings(self, warnings: Logger<(), W>) -> Logger<Self, W> {
         Logger {
             value: self,
             warnings: warnings.warnings,
@@ -378,8 +319,8 @@ pub trait LoggingWrap: Sized {
     fn wrap_with_context<C: Display>(
         self,
         context: impl FnOnce() -> C,
-        warnings: Logger<()>,
-    ) -> Logger<Self> {
+        warnings: Logger<(), W>,
+    ) -> Logger<Self, W> {
         let warnings = warnings.with_context(context).warnings;
         Logger {
             value: self,
@@ -388,7 +329,7 @@ pub trait LoggingWrap: Sized {
     }
 }
 
-impl<T> LoggingWrap for T {}
+impl<T, W: Warnings> LoggingWrap<W> for T {}
 
 /// An extension trait providing the ability to apply a context to a `Result`
 /// (similar to a [`Logger`]).
@@ -413,11 +354,11 @@ impl<T, E: Display> ResultContext for Result<T, E> {
 /// ability to filter errors from the iterator and record them as warnings.
 pub trait LogErrors: Iterator {
     /// Filters the errors from an iterator of results, logging them as warnings
-    /// to `log`.
+    /// to `logger`.
     #[inline]
-    fn log_errors<S, T, E: Display>(
+    fn log_errors<S, T, W: Warnings, E: Display>(
         self,
-        logger: &Logger<S>,
+        logger: &Logger<S, W>,
     ) -> FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T>>
     where
         Self: Sized + Iterator<Item = Result<T, E>>,
@@ -434,9 +375,9 @@ pub trait LogErrors: Iterator {
     /// Filters the errors from an iterator of results, logging each as a
     /// warning saying `message`.
     #[inline]
-    fn log_errors_with_message<S, T, E>(
+    fn log_errors_with_message<S, T, W: Warnings, E>(
         self,
-        logger: &Logger<S>,
+        logger: &Logger<S, W>,
         message: String,
     ) -> FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T>>
     where
@@ -452,12 +393,12 @@ pub trait LogErrors: Iterator {
     }
 
     /// Filters the errors from an iterator of results, logging them as warnings
-    /// to `log` with a context applied. The warnings appear indented beneath
+    /// to `logger` with a context applied. The warnings appear indented beneath
     /// the context.
     #[inline]
-    fn log_errors_with_context<'a, S, T, E: Display, C: Display>(
+    fn log_errors_with_context<'a, S, T, W: Warnings, E: Display, C: Display>(
         self,
-        logger: &'a Logger<S>,
+        logger: &'a Logger<S, W>,
         context: impl Fn() -> C,
     ) -> FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T>>
     where
@@ -515,9 +456,12 @@ impl<I, T, E> LogErrors for I where I: Iterator<Item = Result<T, E>> {}
 pub trait LogWarnings: Iterator {
     /// Relogs all warnings in an iterator, unwrapping each [`Logger`].
     #[inline]
-    fn log_warnings<S, T>(self, logger: &Logger<S>) -> Map<Self, impl FnMut(Logger<T>) -> T>
+    fn log_warnings<S, T, W: Warnings>(
+        self,
+        logger: &Logger<S, W>,
+    ) -> Map<Self, impl FnMut(Logger<T, W>) -> T>
     where
-        Self: Sized + Iterator<Item = Logger<T>>,
+        Self: Sized + Iterator<Item = Logger<T, W>>,
     {
         self.into_iter().map(move |item| item.relog(logger))
     }
@@ -525,13 +469,13 @@ pub trait LogWarnings: Iterator {
     /// Relogs all warnings in an iterator with a context applied, unwrapping
     /// each [`Logger`]. The warnings appear indented beneath the context.
     #[inline]
-    fn log_warnings_with_context<S, T, C: Display>(
+    fn log_warnings_with_context<S, T, W: Warnings, C: Display>(
         self,
-        logger: &Logger<S>,
+        logger: &Logger<S, W>,
         context: impl Fn() -> C,
-    ) -> Map<Self, impl FnMut(Logger<T>) -> T>
+    ) -> Map<Self, impl FnMut(Logger<T, W>) -> T>
     where
-        Self: Sized + Iterator<Item = Logger<T>>,
+        Self: Sized + Iterator<Item = Logger<T, W>>,
     {
         self.into_iter()
             .map(move |item| item.relog_with_context(&context, logger))
@@ -539,15 +483,15 @@ pub trait LogWarnings: Iterator {
 
     /// Prints all warnings in an iterator, unwrapping each [`Logger`].
     #[inline]
-    fn print_warnings<T>(self) -> Map<Self, impl FnMut(Logger<T>) -> T>
+    fn print_warnings<T, W: Warnings>(self) -> Map<Self, impl FnMut(Logger<T, W>) -> T>
     where
-        Self: Sized + Iterator<Item = Logger<T>>,
+        Self: Sized + Iterator<Item = Logger<T, W>>,
     {
         self.into_iter().map(move |item| item.print_warnings())
     }
 }
 
-impl<I, T> LogWarnings for I where I: Iterator<Item = Logger<T>> {}
+impl<I, T, W> LogWarnings for I where I: Iterator<Item = Logger<T, W>> {}
 
 /// A fallible version of [`FromIterator`], where any item that fails generates
 /// a warning in the [`Logger`].
@@ -555,7 +499,7 @@ pub trait FromIteratorWithWarnings<A>: Sized {
     /// Builds a collection from an iterator, where processing of each item may
     /// fail. Any failed items generate a warning in the [`Logger`].
     #[must_use]
-    fn from_iter_with_warnings<T: IntoIterator<Item = A>>(iter: T) -> Logger<Self>;
+    fn from_iter_with_warnings<T: IntoIterator<Item = A>, W>(iter: T) -> Logger<Self, W>;
 }
 
 /// A fallible version of [`collect`]. See [`FromIteratorWithWarnings`] for more
@@ -567,7 +511,7 @@ pub trait CollectWithWarning<T>: Iterator<Item = T> {
     /// fail. Any failed items generate a warning in the [`Logger`].
     #[inline]
     #[must_use]
-    fn collect_with_warnings<B: FromIteratorWithWarnings<T>>(self) -> Logger<B>
+    fn collect_with_warnings<B: FromIteratorWithWarnings<T>, W>(self) -> Logger<B, W>
     where
         Self: Sized,
     {
@@ -576,3 +520,24 @@ pub trait CollectWithWarning<T>: Iterator<Item = T> {
 }
 
 impl<T, I: Iterator<Item = T>> CollectWithWarning<T> for I {}
+
+// pub struct Logger<T>(LoggerBase<T, Rc<RefCell<Vec<String>>>>);
+// pub struct AtomicLogger<T>(LoggerBase<T, Arc<Mutex<Vec<String>>>>);
+
+// pub trait AnyLogger<T> {
+//     pub fn transpose(self) -> Result<LoggerBase<T, W>, E>
+// }
+
+// impl<T> From<LoggerBase<T, Rc<RefCell<Vec<String>>>>> for Logger<T> {
+//     #[inline]
+//     fn from(value: LoggerBase<T, Rc<RefCell<Vec<String>>>>) -> Self {
+//         Logger(value)
+//     }
+// }
+
+// impl<T> From<LoggerBase<T, Arc<Mutex<Vec<String>>>>> for AtomicLogger<T> {
+//     #[inline]
+//     fn from(value: LoggerBase<T, Arc<Mutex<Vec<String>>>>) -> Self {
+//         AtomicLogger(value)
+//     }
+// }
