@@ -492,7 +492,7 @@ pub trait SendErrors: ParallelIterator {
     fn send_errors<S, T, W, E>(
         self,
         tx: &Sender<String>,
-    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T> + Sync + Send>
+    ) -> rayon::iter::FilterMap<Self, impl Fn(Result<T, E>) -> Option<T> + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Result<T, E>>,
         T: Sync + Send,
@@ -513,7 +513,7 @@ pub trait SendErrors: ParallelIterator {
         self,
         tx: &Sender<String>,
         message: String,
-    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T> + Sync + Send>
+    ) -> rayon::iter::FilterMap<Self, impl Fn(Result<T, E>) -> Option<T> + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Result<T, E>>,
         W: Warnings,
@@ -533,7 +533,7 @@ pub trait SendErrors: ParallelIterator {
         self,
         tx: &Sender<String>,
         context: P,
-    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T> + Sync + Send>
+    ) -> rayon::iter::FilterMap<Self, impl Fn(Result<T, E>) -> Option<T> + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Result<T, E>>,
         W: Warnings,
@@ -599,12 +599,14 @@ impl<I, T, W> LogWarnings for I where I: Iterator<Item = Logger<T, W>> {}
 pub trait SendWarnings: ParallelIterator {
     /// Relogs all warnings in an iterator, unwrapping each [`Logger`].
     #[inline]
-    fn send_warnings<S, T: Send, W: Warnings>(
+    fn send_warnings<S, T, W>(
         self,
         tx: &Sender<String>,
-    ) -> rayon::iter::Map<Self, impl FnMut(Logger<T, W>) -> T + Sync + Send>
+    ) -> rayon::iter::Map<Self, impl Fn(Logger<T, W>) -> T + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Logger<T, W>>,
+        T: Send,
+        W: Warnings,
     {
         self.map(move |item| item.send(tx))
     }
@@ -616,7 +618,7 @@ pub trait SendWarnings: ParallelIterator {
         self,
         tx: &Sender<String>,
         context: impl Fn() -> C + Send + Sync,
-    ) -> rayon::iter::Map<Self, impl FnMut(Logger<T, W>) -> T + Sync + Send>
+    ) -> rayon::iter::Map<Self, impl Fn(Logger<T, W>) -> T + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Logger<T, W>>,
     {
