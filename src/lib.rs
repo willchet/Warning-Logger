@@ -602,7 +602,7 @@ pub trait SendWarnings: ParallelIterator {
     fn send_warnings<S, T: Send, W: Warnings>(
         self,
         tx: &Sender<String>,
-    ) -> rayon::iter::Map<Self, impl FnMut(Logger<T, W>) -> T>
+    ) -> rayon::iter::Map<Self, impl FnMut(Logger<T, W>) -> T + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Logger<T, W>>,
     {
@@ -616,7 +616,7 @@ pub trait SendWarnings: ParallelIterator {
         self,
         tx: &Sender<String>,
         context: impl Fn() -> C + Send + Sync,
-    ) -> rayon::iter::Map<Self, impl FnMut(Logger<T, W>) -> T>
+    ) -> rayon::iter::Map<Self, impl FnMut(Logger<T, W>) -> T + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Logger<T, W>>,
     {
