@@ -638,20 +638,21 @@ pub trait FromIteratorWithWarnings<A, W>: Sized {
 /// details.
 ///
 /// [`collect`]: std::iter::Iterator::collect
-pub trait CollectWithWarning<T, W>: Iterator<Item = T> {
+pub trait CollectWithWarning<T>: Iterator<Item = T> {
     /// Builds a collection from an iterator, where processing of each item may
     /// fail. Any failed items generate a warning in the [`Logger`].
     #[inline]
     #[must_use]
-    fn collect_with_warnings<B: FromIteratorWithWarnings<T, W>>(self) -> Logger<B, W>
+    fn collect_with_warnings<B, W>(self) -> Logger<B, W>
     where
         Self: Sized,
+        B: FromIteratorWithWarnings<T, W>,
     {
         FromIteratorWithWarnings::from_iter_with_warnings(self)
     }
 }
 
-impl<T, I: Iterator<Item = T>, W: Warnings> CollectWithWarning<T, W> for I {}
+impl<T, I: Iterator<Item = T>> CollectWithWarning<T> for I {}
 
 // pub struct Logger<T>(LoggerBase<T, Rc<RefCell<Vec<String>>>>);
 // pub struct AtomicLogger<T>(LoggerBase<T, Arc<Mutex<Vec<String>>>>);
