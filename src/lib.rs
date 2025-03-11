@@ -7,7 +7,7 @@ use std::{
     iter::{FilterMap, Map},
     ops::{Deref, DerefMut},
     rc::Rc,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, mpsc::Sender},
 };
 #[macro_export]
 macro_rules! context {
@@ -60,6 +60,7 @@ pub trait Warnings: Sealed {
     fn new_with(warnings: Vec<String>) -> Self;
     fn borrow_vec(&self) -> Self::BorrowedVec<'_>;
     fn borrow_mut_vec(&self) -> Self::BorrowedMutVec<'_>;
+    fn take_vec(self) -> Vec<String>;
 }
 
 impl Sealed for Rc<RefCell<Vec<String>>> {}
@@ -87,6 +88,11 @@ impl Warnings for Rc<RefCell<Vec<String>>> {
     fn borrow_mut_vec(&self) -> RefMut<'_, Vec<String>> {
         self.borrow_mut()
     }
+
+    #[inline]
+    fn take_vec(self) -> Vec<String> {
+        self.take()
+    }
 }
 
 impl Sealed for Arc<Mutex<Vec<String>>> {}
@@ -113,6 +119,11 @@ impl Warnings for Arc<Mutex<Vec<String>>> {
     #[inline]
     fn borrow_mut_vec(&self) -> MutexGuard<'_, Vec<String>> {
         self.lock().unwrap()
+    }
+
+    #[inline]
+    fn take_vec(self) -> Vec<String> {
+        Arc::into_inner(self).unwrap().into_inner().unwrap()
     }
 }
 
@@ -208,6 +219,15 @@ impl<T, W: Warnings> Logger<T, W> {
         self.value
     }
 
+    /// Unwraps the value of a [`Logger`], taking its warnings and sending them.
+    #[inline]
+    pub fn send(self, tx: &Sender<String>) -> T {
+        for warning in self.warnings.take_vec() {
+            tx.send(warning).unwrap()
+        }
+        self.value
+    }
+
     /// Unwraps the value of a [`Logger`], taking its warnings and logging them
     /// in a new [`Logger`] with a context applied. The warnings appear indented
     /// beneath the context.
@@ -219,6 +239,19 @@ impl<T, W: Warnings> Logger<T, W> {
     ) -> T {
         if let Some(warning) = self.with_context_helper(context) {
             logger.log(warning)
+        }
+        self.value
+    }
+
+    /// Unwraps the value of a [`Logger`], taking its warnings and sending them.
+    #[inline]
+    pub fn send_with_context<C: Display>(
+        self,
+        context: impl FnOnce() -> C,
+        tx: &Sender<String>,
+    ) -> T {
+        if let Some(warning) = self.with_context_helper(context) {
+            tx.send(warning).unwrap()
         }
         self.value
     }
@@ -488,6 +521,33 @@ pub trait LogWarnings: Iterator {
         Self: Sized + Iterator<Item = Logger<T, W>>,
     {
         self.into_iter().map(move |item| item.print_warnings())
+    }
+
+    /// Relogs all warnings in an iterator, unwrapping each [`Logger`].
+    #[inline]
+    fn send_warnings<S, T, W: Warnings>(
+        self,
+        tx: &Sender<String>,
+    ) -> Map<Self, impl FnMut(Logger<T, W>) -> T>
+    where
+        Self: Sized + Iterator<Item = Logger<T, W>>,
+    {
+        self.into_iter().map(move |item| item.send(tx))
+    }
+
+    /// Relogs all warnings in an iterator with a context applied, unwrapping
+    /// each [`Logger`]. The warnings appear indented beneath the context.
+    #[inline]
+    fn send_warnings_with_context<S, T, W: Warnings, C: Display>(
+        self,
+        tx: &Sender<String>,
+        context: impl Fn() -> C,
+    ) -> Map<Self, impl FnMut(Logger<T, W>) -> T>
+    where
+        Self: Sized + Iterator<Item = Logger<T, W>>,
+    {
+        self.into_iter()
+            .map(move |item| item.send_with_context(&context, tx))
     }
 }
 
