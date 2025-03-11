@@ -65,9 +65,11 @@ pub trait Warning: Sealed {
     fn take_vec(self) -> Vec<String>;
 }
 
-impl Sealed for Rc<RefCell<Vec<String>>> {}
+type BasicWarning = Rc<RefCell<Vec<String>>>;
 
-impl Warning for Rc<RefCell<Vec<String>>> {
+impl Sealed for BasicWarning {}
+
+impl Warning for BasicWarning {
     type BorrowedVec<'a> = Ref<'a, Vec<String>>;
     type BorrowedMutVec<'a> = RefMut<'a, Vec<String>>;
 
@@ -97,9 +99,11 @@ impl Warning for Rc<RefCell<Vec<String>>> {
     }
 }
 
-impl Sealed for Arc<Mutex<Vec<String>>> {}
+type AtomicWarning = Arc<Mutex<Vec<String>>>;
 
-impl Warning for Arc<Mutex<Vec<String>>> {
+impl Sealed for AtomicWarning {}
+
+impl Warning for AtomicWarning {
     type BorrowedVec<'a> = MutexGuard<'a, Vec<String>>;
     type BorrowedMutVec<'a> = MutexGuard<'a, Vec<String>>;
 
@@ -131,12 +135,13 @@ impl Warning for Arc<Mutex<Vec<String>>> {
 
 /// A struct wrapping any type which also holds any number of warnings.
 #[derive(Debug)]
-pub struct Logger<T, W = Rc<RefCell<Vec<String>>>> {
+pub struct Logger<T, W = BasicWarning> {
     value: T,
     warnings: W,
 }
 
-pub type AtomicLogger<T> = Logger<T, Arc<Mutex<Vec<String>>>>;
+pub type BasicLogger<T> = Logger<T, BasicWarning>;
+pub type AtomicLogger<T> = Logger<T, AtomicWarning>;
 
 impl<T, E, W: Warning> Logger<Result<T, E>, W> {
     /// Converts a [`Logger`] of a [`Result`] to a [`Result`] of a [`Logger`].
@@ -329,21 +334,41 @@ impl<T, E, W: Warning> LoggerInResult<T, E, W> for Result<Logger<T, W>, E> {
 }
 
 /// An extension trait allowing any value to be wrapped into a [`Logger`].
-pub trait LoggingWrap<W: Warning>: Sized {
+pub trait LoggingWrap: Sized {
     /// Wraps the value in a [`Logger`] with no warnings.
     #[inline]
     #[must_use]
-    fn wrap(self) -> Logger<Self, W> {
-        Logger::<Self, W>::new(self)
+    fn wrap(self) -> Logger<Self> {
+        Logger::new(self)
+    }
+
+    /// Wraps the value in a [`Logger`] with no warnings.
+    #[inline]
+    #[must_use]
+    fn wrap_atomic(self) -> Logger<Self, AtomicWarning> {
+        Logger::new(self)
     }
 
     /// Wraps the value in a [`Logger`] with a set of warnings.
     #[inline]
     #[must_use]
-    fn wrap_with_warnings(self, warnings: Logger<(), W>) -> Logger<Self, W> {
+    fn wrap_with_warnings<W: Warning>(self, warnings: Logger<(), W>) -> Logger<Self> {
         Logger {
             value: self,
-            warnings: warnings.warnings,
+            warnings: Warning::new_with(warnings.warnings.take_vec()),
+        }
+    }
+
+    /// Wraps the value in a [`Logger`] with a set of warnings.
+    #[inline]
+    #[must_use]
+    fn wrap_with_warnings_atomic<W: Warning>(
+        self,
+        warnings: Logger<(), W>,
+    ) -> Logger<Self, AtomicWarning> {
+        Logger {
+            value: self,
+            warnings: Warning::new_with(warnings.warnings.take_vec()),
         }
     }
 
@@ -351,20 +376,36 @@ pub trait LoggingWrap<W: Warning>: Sized {
     /// The warnings appear indented beneath the context.
     #[inline]
     #[must_use]
-    fn wrap_with_context<C: Display>(
+    fn wrap_with_context<C: Display, W: Warning>(
         self,
         context: impl FnOnce() -> C,
         warnings: Logger<(), W>,
-    ) -> Logger<Self, W> {
+    ) -> Logger<Self> {
         let warnings = warnings.with_context(context).warnings;
         Logger {
             value: self,
-            warnings,
+            warnings: Warning::new_with(warnings.take_vec()),
+        }
+    }
+
+    /// Wraps the value in a [`Logger`] with a set of warnings and a context.
+    /// The warnings appear indented beneath the context.
+    #[inline]
+    #[must_use]
+    fn wrap_with_context_atomic<C: Display, W: Warning>(
+        self,
+        context: impl FnOnce() -> C,
+        warnings: Logger<(), W>,
+    ) -> Logger<Self, AtomicWarning> {
+        let warnings = warnings.with_context(context).warnings;
+        Logger {
+            value: self,
+            warnings: Warning::new_with(warnings.take_vec()),
         }
     }
 }
 
-impl<T, W: Warning> LoggingWrap<W> for T {}
+impl<T> LoggingWrap for T {}
 
 /// An extension trait providing the ability to apply a context to a `Result`
 /// (similar to a [`Logger`]).
@@ -644,20 +685,20 @@ pub trait CollectWithWarning<T>: Iterator<Item = T> {
     /// fail. Any failed items generate a warning in the [`Logger`].
     #[inline]
     #[must_use]
-    fn collect_with_warnings<B>(self) -> Logger<B, Rc<RefCell<Vec<String>>>>
+    fn collect_with_warnings<B>(self) -> Logger<B, BasicWarning>
     where
         Self: Sized,
-        B: FromIteratorWithWarnings<T, Rc<RefCell<Vec<String>>>>,
+        B: FromIteratorWithWarnings<T, BasicWarning>,
     {
         FromIteratorWithWarnings::from_iter_with_warnings(self)
     }
 
     #[inline]
     #[must_use]
-    fn collect_with_warnings_atomic<B>(self) -> Logger<B, Arc<Mutex<Vec<String>>>>
+    fn collect_with_warnings_atomic<B>(self) -> Logger<B, AtomicWarning>
     where
         Self: Sized,
-        B: FromIteratorWithWarnings<T, Arc<Mutex<Vec<String>>>>,
+        B: FromIteratorWithWarnings<T, AtomicWarning>,
     {
         FromIteratorWithWarnings::from_iter_with_warnings(self)
     }
@@ -665,23 +706,23 @@ pub trait CollectWithWarning<T>: Iterator<Item = T> {
 
 impl<T, I: Iterator<Item = T>> CollectWithWarning<T> for I {}
 
-// pub struct Logger<T>(LoggerBase<T, Rc<RefCell<Vec<String>>>>);
-// pub struct AtomicLogger<T>(LoggerBase<T, Arc<Mutex<Vec<String>>>>);
+// pub struct Logger<T>(LoggerBase<T, BasicWarning>);
+// pub struct AtomicLogger<T>(LoggerBase<T, AtomicWarning>);
 
 // pub trait AnyLogger<T> {
 //     pub fn transpose(self) -> Result<LoggerBase<T, W>, E>
 // }
 
-// impl<T> From<LoggerBase<T, Rc<RefCell<Vec<String>>>>> for Logger<T> {
+// impl<T> From<LoggerBase<T, BasicWarning>> for Logger<T> {
 //     #[inline]
-//     fn from(value: LoggerBase<T, Rc<RefCell<Vec<String>>>>) -> Self {
+//     fn from(value: LoggerBase<T, BasicWarning>) -> Self {
 //         Logger(value)
 //     }
 // }
 
-// impl<T> From<LoggerBase<T, Arc<Mutex<Vec<String>>>>> for AtomicLogger<T> {
+// impl<T> From<LoggerBase<T, AtomicWarning>> for AtomicLogger<T> {
 //     #[inline]
-//     fn from(value: LoggerBase<T, Arc<Mutex<Vec<String>>>>) -> Self {
+//     fn from(value: LoggerBase<T, AtomicWarning>) -> Self {
 //         AtomicLogger(value)
 //     }
 // }

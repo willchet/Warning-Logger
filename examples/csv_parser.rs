@@ -34,7 +34,7 @@ impl std::fmt::Display for Record {
 }
 
 fn parse_csv(file_path: &str) -> Result<Logger<Vec<Record>>> {
-    let logger = Logger::new(());
+    let logger = BasicLogger::new(());
 
     let file = File::open(file_path).err_with_context(context!(
         "While opening {file_path}, the following error occurred:"
@@ -64,7 +64,7 @@ fn parse_csv(file_path: &str) -> Result<Logger<Vec<Record>>> {
 }
 
 fn parse_line(line: String) -> Result<Logger<Record>> {
-    let logger = Logger::new(());
+    let logger = BasicLogger::new(());
 
     let mut line_parts = line.split(',');
 
@@ -115,7 +115,7 @@ fn parse_line(line: String) -> Result<Logger<Record>> {
 }
 
 fn parse_lucky_numbers<'a>(iter: impl Iterator<Item = &'a str>) -> Logger<Result<Vec<u8>>> {
-    let logger = Logger::new(());
+    let logger = BasicLogger::new(());
     let nums = iter
         .map(|x| x.parse::<u8>())
         .log_errors(&logger)
