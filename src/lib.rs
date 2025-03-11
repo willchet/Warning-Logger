@@ -3,6 +3,7 @@
 use anyhow::{Result, anyhow};
 use rayon::iter::ParallelIterator;
 use std::{
+    borrow::Borrow,
     cell::{Ref, RefCell, RefMut},
     fmt::Display,
     iter::{FilterMap, Map},
@@ -49,7 +50,7 @@ mod sealed {
 }
 use sealed::Sealed;
 
-pub trait Warnings: Sealed {
+pub trait Warning: Sealed {
     type BorrowedVec<'a>: Deref<Target = Vec<String>>
     where
         Self: 'a;
@@ -66,7 +67,7 @@ pub trait Warnings: Sealed {
 
 impl Sealed for Rc<RefCell<Vec<String>>> {}
 
-impl Warnings for Rc<RefCell<Vec<String>>> {
+impl Warning for Rc<RefCell<Vec<String>>> {
     type BorrowedVec<'a> = Ref<'a, Vec<String>>;
     type BorrowedMutVec<'a> = RefMut<'a, Vec<String>>;
 
@@ -82,7 +83,7 @@ impl Warnings for Rc<RefCell<Vec<String>>> {
 
     #[inline]
     fn borrow_vec(&self) -> Ref<'_, Vec<String>> {
-        self.borrow()
+        RefCell::borrow(self)
     }
 
     #[inline]
@@ -98,7 +99,7 @@ impl Warnings for Rc<RefCell<Vec<String>>> {
 
 impl Sealed for Arc<Mutex<Vec<String>>> {}
 
-impl Warnings for Arc<Mutex<Vec<String>>> {
+impl Warning for Arc<Mutex<Vec<String>>> {
     type BorrowedVec<'a> = MutexGuard<'a, Vec<String>>;
     type BorrowedMutVec<'a> = MutexGuard<'a, Vec<String>>;
 
@@ -137,7 +138,7 @@ pub struct Logger<T, W = Rc<RefCell<Vec<String>>>> {
 
 pub type AtomicLogger<T> = Logger<T, Arc<Mutex<Vec<String>>>>;
 
-impl<T, E, W: Warnings> Logger<Result<T, E>, W> {
+impl<T, E, W: Warning> Logger<Result<T, E>, W> {
     /// Converts a [`Logger`] of a [`Result`] to a [`Result`] of a [`Logger`].
     #[inline]
     pub fn transpose(self) -> Result<Logger<T, W>, E> {
@@ -162,7 +163,7 @@ impl<T, W> Logger<T, W> {
     }
 }
 
-impl<T, W: Warnings> Logger<T, W> {
+impl<T, W: Warning> Logger<T, W> {
     /// Wraps an existing value in a [`Logger`] with no warnings.
     #[inline]
     pub fn new(value: T) -> Self {
@@ -213,7 +214,7 @@ impl<T, W: Warnings> Logger<T, W> {
     /// Unwraps the value of a [`Logger`], taking its warnings and logging them
     /// in a new [`Logger`].
     #[inline]
-    pub fn relog<S, V: Warnings>(self, logger: &Logger<S, V>) -> T {
+    pub fn relog<S, V: Warning>(self, logger: &Logger<S, V>) -> T {
         for warning in self.warnings.borrow_vec().iter() {
             logger.log(warning);
         }
@@ -222,9 +223,9 @@ impl<T, W: Warnings> Logger<T, W> {
 
     /// Unwraps the value of a [`Logger`], taking its warnings and sending them.
     #[inline]
-    pub fn send(self, tx: &Sender<String>) -> T {
+    pub fn send(self, tx: impl Borrow<Sender<String>>) -> T {
         for warning in self.warnings.take_vec() {
-            tx.send(warning).unwrap()
+            tx.borrow().send(warning).unwrap()
         }
         self.value
     }
@@ -233,7 +234,7 @@ impl<T, W: Warnings> Logger<T, W> {
     /// in a new [`Logger`] with a context applied. The warnings appear indented
     /// beneath the context.
     #[inline]
-    pub fn relog_with_context<S, C: Display, V: Warnings>(
+    pub fn relog_with_context<S, C: Display, V: Warning>(
         self,
         context: impl FnOnce() -> C,
         logger: &Logger<S, V>,
@@ -249,10 +250,10 @@ impl<T, W: Warnings> Logger<T, W> {
     pub fn send_with_context<C: Display>(
         self,
         context: impl FnOnce() -> C,
-        tx: &Sender<String>,
+        tx: impl Borrow<Sender<String>>,
     ) -> T {
         if let Some(warning) = self.with_context_helper(context) {
-            tx.send(warning).unwrap()
+            tx.borrow().send(warning).unwrap()
         }
         self.value
     }
@@ -307,7 +308,7 @@ pub trait LoggerInResult<T, E, W> {
     fn map_val<U>(self, f: impl FnOnce(T) -> U) -> Result<Logger<U, W>, E>;
 }
 
-impl<T, E, W: Warnings> LoggerInResult<T, E, W> for Result<Logger<T, W>, E> {
+impl<T, E, W: Warning> LoggerInResult<T, E, W> for Result<Logger<T, W>, E> {
     #[inline]
     fn warnings_with_context<C: Display>(mut self, context: impl FnOnce() -> C) -> Self {
         if let Ok(log) = &mut self
@@ -328,7 +329,7 @@ impl<T, E, W: Warnings> LoggerInResult<T, E, W> for Result<Logger<T, W>, E> {
 }
 
 /// An extension trait allowing any value to be wrapped into a [`Logger`].
-pub trait LoggingWrap<W: Warnings>: Sized {
+pub trait LoggingWrap<W: Warning>: Sized {
     /// Wraps the value in a [`Logger`] with no warnings.
     #[inline]
     #[must_use]
@@ -363,7 +364,7 @@ pub trait LoggingWrap<W: Warnings>: Sized {
     }
 }
 
-impl<T, W: Warnings> LoggingWrap<W> for T {}
+impl<T, W: Warning> LoggingWrap<W> for T {}
 
 /// An extension trait providing the ability to apply a context to a `Result`
 /// (similar to a [`Logger`]).
@@ -390,7 +391,7 @@ pub trait LogErrors: Iterator {
     /// Filters the errors from an iterator of results, logging them as warnings
     /// to `logger`.
     #[inline]
-    fn log_errors<S, T, W: Warnings, E: Display>(
+    fn log_errors<S, T, W: Warning, E: Display>(
         self,
         logger: &Logger<S, W>,
     ) -> FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T>>
@@ -409,7 +410,7 @@ pub trait LogErrors: Iterator {
     /// Filters the errors from an iterator of results, logging each as a
     /// warning saying `message`.
     #[inline]
-    fn log_errors_with_message<S, T, W: Warnings, E>(
+    fn log_errors_with_message<S, T, W: Warning, E>(
         self,
         logger: &Logger<S, W>,
         message: String,
@@ -430,7 +431,7 @@ pub trait LogErrors: Iterator {
     /// to `logger` with a context applied. The warnings appear indented beneath
     /// the context.
     #[inline]
-    fn log_errors_with_context<'a, S, T, W: Warnings, E: Display, C: Display>(
+    fn log_errors_with_context<'a, S, T, W: Warning, E: Display, C: Display>(
         self,
         logger: &'a Logger<S, W>,
         context: impl Fn() -> C,
@@ -491,7 +492,7 @@ pub trait SendErrors: ParallelIterator {
     #[inline]
     fn send_errors<T, E>(
         self,
-        tx: &Sender<String>,
+        tx: impl Borrow<Sender<String>> + Sync + Send,
     ) -> rayon::iter::FilterMap<Self, impl Fn(Result<T, E>) -> Option<T> + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Result<T, E>>,
@@ -501,7 +502,7 @@ pub trait SendErrors: ParallelIterator {
         self.filter_map(move |item| match item {
             Ok(value) => Some(value),
             Err(e) => {
-                tx.send(e.to_string()).unwrap();
+                tx.borrow().send(e.to_string()).unwrap();
                 None
             }
         })
@@ -510,7 +511,7 @@ pub trait SendErrors: ParallelIterator {
     #[inline]
     fn send_errors_with_message<T, E>(
         self,
-        tx: &Sender<String>,
+        tx: Sender<String>,
         message: String,
     ) -> rayon::iter::FilterMap<Self, impl Fn(Result<T, E>) -> Option<T> + Sync + Send>
     where
@@ -529,7 +530,7 @@ pub trait SendErrors: ParallelIterator {
     #[inline]
     fn send_errors_with_context<T, E, C, P>(
         self,
-        tx: &Sender<String>,
+        tx: Sender<String>,
         context: P,
     ) -> rayon::iter::FilterMap<Self, impl Fn(Result<T, E>) -> Option<T> + Sync + Send>
     where
@@ -556,7 +557,7 @@ impl<I, T, E> SendErrors for I where I: ParallelIterator<Item = Result<T, E>> {}
 pub trait LogWarnings: Iterator {
     /// Relogs all warnings in an iterator, unwrapping each [`Logger`].
     #[inline]
-    fn log_warnings<S, T, W: Warnings, V: Warnings>(
+    fn log_warnings<S, T, W: Warning, V: Warning>(
         self,
         logger: &Logger<S, W>,
     ) -> Map<Self, impl FnMut(Logger<T, V>) -> T>
@@ -569,7 +570,7 @@ pub trait LogWarnings: Iterator {
     /// Relogs all warnings in an iterator with a context applied, unwrapping
     /// each [`Logger`]. The warnings appear indented beneath the context.
     #[inline]
-    fn log_warnings_with_context<S, T, W: Warnings, V: Warnings, C: Display>(
+    fn log_warnings_with_context<S, T, W: Warning, V: Warning, C: Display>(
         self,
         logger: &Logger<S, W>,
         context: impl Fn() -> C,
@@ -583,7 +584,7 @@ pub trait LogWarnings: Iterator {
 
     /// Prints all warnings in an iterator, unwrapping each [`Logger`].
     #[inline]
-    fn print_warnings<T, W: Warnings>(self) -> Map<Self, impl FnMut(Logger<T, W>) -> T>
+    fn print_warnings<T, W: Warning>(self) -> Map<Self, impl FnMut(Logger<T, W>) -> T>
     where
         Self: Sized + Iterator<Item = Logger<T, W>>,
     {
@@ -598,28 +599,28 @@ pub trait SendWarnings: ParallelIterator {
     #[inline]
     fn send_warnings<T, W>(
         self,
-        tx: &Sender<String>,
+        tx: impl Borrow<Sender<String>> + Sync + Send,
     ) -> rayon::iter::Map<Self, impl Fn(Logger<T, W>) -> T + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Logger<T, W>>,
         T: Send,
-        W: Warnings,
+        W: Warning,
     {
-        self.map(move |item| item.send(tx))
+        self.map(move |item| item.send(tx.borrow()))
     }
 
     /// Relogs all warnings in an iterator with a context applied, unwrapping
     /// each [`Logger`]. The warnings appear indented beneath the context.
     #[inline]
-    fn send_warnings_with_context<T: Send, W: Warnings, C: Display>(
+    fn send_warnings_with_context<T: Send, W: Warning, C: Display>(
         self,
-        tx: &Sender<String>,
+        tx: Sender<String>,
         context: impl Fn() -> C + Send + Sync,
     ) -> rayon::iter::Map<Self, impl Fn(Logger<T, W>) -> T + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Logger<T, W>>,
     {
-        self.map(move |item| item.send_with_context(&context, tx))
+        self.map(move |item| item.send_with_context(&context, &tx))
     }
 }
 
@@ -643,10 +644,20 @@ pub trait CollectWithWarning<T>: Iterator<Item = T> {
     /// fail. Any failed items generate a warning in the [`Logger`].
     #[inline]
     #[must_use]
-    fn collect_with_warnings<B, W>(self) -> Logger<B, W>
+    fn collect_with_warnings<B>(self) -> Logger<B, Rc<RefCell<Vec<String>>>>
     where
         Self: Sized,
-        B: FromIteratorWithWarnings<T, W>,
+        B: FromIteratorWithWarnings<T, Rc<RefCell<Vec<String>>>>,
+    {
+        FromIteratorWithWarnings::from_iter_with_warnings(self)
+    }
+
+    #[inline]
+    #[must_use]
+    fn collect_with_warnings_atomic<B>(self) -> Logger<B, Arc<Mutex<Vec<String>>>>
+    where
+        Self: Sized,
+        B: FromIteratorWithWarnings<T, Arc<Mutex<Vec<String>>>>,
     {
         FromIteratorWithWarnings::from_iter_with_warnings(self)
     }
