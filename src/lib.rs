@@ -489,7 +489,7 @@ pub trait SendErrors: ParallelIterator {
     /// Filters the errors from an iterator of results, logging them as warnings
     /// to `logger`.
     #[inline]
-    fn send_errors<S, T, E>(
+    fn send_errors<T, E>(
         self,
         tx: &Sender<String>,
     ) -> rayon::iter::FilterMap<Self, impl Fn(Result<T, E>) -> Option<T> + Sync + Send>
@@ -508,7 +508,7 @@ pub trait SendErrors: ParallelIterator {
     }
 
     #[inline]
-    fn send_errors_with_message<S, T, E>(
+    fn send_errors_with_message<T, E>(
         self,
         tx: &Sender<String>,
         message: String,
@@ -527,7 +527,7 @@ pub trait SendErrors: ParallelIterator {
     }
 
     #[inline]
-    fn send_errors_with_context<S, T, E, C, P>(
+    fn send_errors_with_context<T, E, C, P>(
         self,
         tx: &Sender<String>,
         context: P,
