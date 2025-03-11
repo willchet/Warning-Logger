@@ -338,7 +338,13 @@ pub trait LoggingWrap: Sized {
     /// Wraps the value in a [`Logger`] with no warnings.
     #[inline]
     #[must_use]
-    fn wrap(self) -> Logger<Self> {
+    fn wrap<W: Warning>(self) -> Logger<Self, W> {
+        Logger::new(self)
+    }
+
+    #[inline]
+    #[must_use]
+    fn wrap_basic(self) -> Logger<Self> {
         Logger::new(self)
     }
 
@@ -352,7 +358,20 @@ pub trait LoggingWrap: Sized {
     /// Wraps the value in a [`Logger`] with a set of warnings.
     #[inline]
     #[must_use]
-    fn wrap_with_warnings<W: Warning>(self, warnings: Logger<(), W>) -> Logger<Self> {
+    fn wrap_with_warnings<W: Warning, V: Warning>(
+        self,
+        warnings: Logger<(), V>,
+    ) -> Logger<Self, W> {
+        Logger {
+            value: self,
+            warnings: Warning::new_with(warnings.warnings.take_vec()),
+        }
+    }
+
+    /// Wraps the value in a [`Logger`] with a set of warnings.
+    #[inline]
+    #[must_use]
+    fn wrap_with_warnings_basic<W: Warning>(self, warnings: Logger<(), W>) -> Logger<Self> {
         Logger {
             value: self,
             warnings: Warning::new_with(warnings.warnings.take_vec()),
@@ -376,7 +395,21 @@ pub trait LoggingWrap: Sized {
     /// The warnings appear indented beneath the context.
     #[inline]
     #[must_use]
-    fn wrap_with_context<C: Display, W: Warning>(
+    fn wrap_with_context<C: Display, W: Warning, V: Warning>(
+        self,
+        context: impl FnOnce() -> C,
+        warnings: Logger<(), V>,
+    ) -> Logger<Self, W> {
+        let warnings = warnings.with_context(context).warnings;
+        Logger {
+            value: self,
+            warnings: Warning::new_with(warnings.take_vec()),
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    fn wrap_with_context_basic<C: Display, W: Warning>(
         self,
         context: impl FnOnce() -> C,
         warnings: Logger<(), W>,
