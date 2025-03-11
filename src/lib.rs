@@ -489,14 +489,13 @@ pub trait SendErrors: ParallelIterator {
     /// Filters the errors from an iterator of results, logging them as warnings
     /// to `logger`.
     #[inline]
-    fn send_errors<S, T, W, E>(
+    fn send_errors<S, T, E>(
         self,
         tx: &Sender<String>,
     ) -> rayon::iter::FilterMap<Self, impl Fn(Result<T, E>) -> Option<T> + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Result<T, E>>,
         T: Sync + Send,
-        W: Warnings,
         E: Display,
     {
         self.filter_map(move |item| match item {
@@ -509,14 +508,13 @@ pub trait SendErrors: ParallelIterator {
     }
 
     #[inline]
-    fn send_errors_with_message<S, T, W, E>(
+    fn send_errors_with_message<S, T, E>(
         self,
         tx: &Sender<String>,
         message: String,
     ) -> rayon::iter::FilterMap<Self, impl Fn(Result<T, E>) -> Option<T> + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Result<T, E>>,
-        W: Warnings,
         T: Sync + Send,
     {
         self.filter_map(move |item| match item {
@@ -529,14 +527,13 @@ pub trait SendErrors: ParallelIterator {
     }
 
     #[inline]
-    fn send_errors_with_context<S, T, W, E, C, P>(
+    fn send_errors_with_context<S, T, E, C, P>(
         self,
         tx: &Sender<String>,
         context: P,
     ) -> rayon::iter::FilterMap<Self, impl Fn(Result<T, E>) -> Option<T> + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Result<T, E>>,
-        W: Warnings,
         E: Display,
         C: Display + Send,
         P: Fn() -> C + Sync + Send,
