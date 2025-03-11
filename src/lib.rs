@@ -485,6 +485,67 @@ pub trait LogErrors: Iterator {
 
 impl<I, T, E> LogErrors for I where I: Iterator<Item = Result<T, E>> {}
 
+pub trait SendErrors: ParallelIterator {
+    /// Filters the errors from an iterator of results, logging them as warnings
+    /// to `logger`.
+    #[inline]
+    fn send_errors<S, T, W: Warnings, E: Display>(
+        self,
+        tx: &Sender<String>,
+    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T>>
+    where
+        Self: Sized + ParallelIterator<Item = Result<T, E>>,
+        T: Send,
+    {
+        self.filter_map(move |item| match item {
+            Ok(value) => Some(value),
+            Err(e) => {
+                tx.send(e.to_string()).unwrap();
+                None
+            }
+        })
+    }
+
+    #[inline]
+    fn send_errors_with_message<S, T: Send, W: Warnings, E>(
+        self,
+        tx: &Sender<String>,
+        message: String,
+    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T>>
+    where
+        Self: Sized + ParallelIterator<Item = Result<T, E>>,
+    {
+        self.filter_map(move |item| match item {
+            Ok(value) => Some(value),
+            Err(_) => {
+                tx.send(message.clone()).unwrap();
+                None
+            }
+        })
+    }
+
+    #[inline]
+    fn send_errors_with_context<'a, S, T: Send, W: Warnings, E: Display, C: Display>(
+        self,
+        tx: &Sender<String>,
+        context: impl Fn() -> C + Send + Sync,
+    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T>>
+    where
+        Self: Sized + ParallelIterator<Item = Result<T, E>>,
+        for<'b> &'b C: Copy,
+    {
+        self.filter_map(move |item| match item {
+            Ok(value) => Some(value),
+            Err(e) => {
+                tx.send(warning_with_context(e, &context)).unwrap();
+                None
+            }
+        })
+    }
+}
+
+impl<I, T, E> SendErrors for I where I: ParallelIterator<Item = Result<T, E>> {}
+
 /// An extension trait for iterators whose items are loggers. It provides the
 /// ability to unwrap the values in the iterator and relog the warnings.
 pub trait LogWarnings: Iterator {
