@@ -213,7 +213,7 @@ impl<T, W: Warnings> Logger<T, W> {
     /// Unwraps the value of a [`Logger`], taking its warnings and logging them
     /// in a new [`Logger`].
     #[inline]
-    pub fn relog<S>(self, logger: &Logger<S, W>) -> T {
+    pub fn relog<S, V: Warnings>(self, logger: &Logger<S, V>) -> T {
         for warning in self.warnings.borrow_vec().iter() {
             logger.log(warning);
         }
@@ -233,10 +233,10 @@ impl<T, W: Warnings> Logger<T, W> {
     /// in a new [`Logger`] with a context applied. The warnings appear indented
     /// beneath the context.
     #[inline]
-    pub fn relog_with_context<S, C: Display>(
+    pub fn relog_with_context<S, C: Display, V: Warnings>(
         self,
         context: impl FnOnce() -> C,
-        logger: &Logger<S, W>,
+        logger: &Logger<S, V>,
     ) -> T {
         if let Some(warning) = self.with_context_helper(context) {
             logger.log(warning)
