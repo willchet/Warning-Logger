@@ -489,13 +489,15 @@ pub trait SendErrors: ParallelIterator {
     /// Filters the errors from an iterator of results, logging them as warnings
     /// to `logger`.
     #[inline]
-    fn send_errors<S, T, W: Warnings, E: Display>(
+    fn send_errors<S, T, W, E>(
         self,
         tx: &Sender<String>,
-    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T>>
+    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T> + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Result<T, E>>,
         T: Sync + Send,
+        W: Warnings,
+        E: Display,
     {
         self.filter_map(move |item| match item {
             Ok(value) => Some(value),
@@ -507,13 +509,14 @@ pub trait SendErrors: ParallelIterator {
     }
 
     #[inline]
-    fn send_errors_with_message<S, T, W: Warnings, E>(
+    fn send_errors_with_message<S, T, W, E>(
         self,
         tx: &Sender<String>,
         message: String,
-    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T>>
+    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T> + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Result<T, E>>,
+        W: Warnings,
         T: Sync + Send,
     {
         self.filter_map(move |item| match item {
@@ -526,13 +529,17 @@ pub trait SendErrors: ParallelIterator {
     }
 
     #[inline]
-    fn send_errors_with_context<S, T, W: Warnings, E: Display, C: Display>(
+    fn send_errors_with_context<S, T, W, E, C, P>(
         self,
         tx: &Sender<String>,
-        context: impl Fn() -> C + Send + Sync,
-    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T>>
+        context: P,
+    ) -> rayon::iter::FilterMap<Self, impl FnMut(Result<T, E>) -> Option<T> + Sync + Send>
     where
         Self: Sized + ParallelIterator<Item = Result<T, E>>,
+        W: Warnings,
+        E: Display,
+        C: Display + Send,
+        P: Fn() -> C + Sync + Send,
         T: Sync + Send,
     {
         self.filter_map(move |item| match item {
