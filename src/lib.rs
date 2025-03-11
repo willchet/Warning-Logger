@@ -556,12 +556,12 @@ impl<I, T, E> SendErrors for I where I: ParallelIterator<Item = Result<T, E>> {}
 pub trait LogWarnings: Iterator {
     /// Relogs all warnings in an iterator, unwrapping each [`Logger`].
     #[inline]
-    fn log_warnings<S, T, W: Warnings>(
+    fn log_warnings<S, T, W: Warnings, V: Warnings>(
         self,
         logger: &Logger<S, W>,
-    ) -> Map<Self, impl FnMut(Logger<T, W>) -> T>
+    ) -> Map<Self, impl FnMut(Logger<T, V>) -> T>
     where
-        Self: Sized + Iterator<Item = Logger<T, W>>,
+        Self: Sized + Iterator<Item = Logger<T, V>>,
     {
         self.into_iter().map(move |item| item.relog(logger))
     }
@@ -569,13 +569,13 @@ pub trait LogWarnings: Iterator {
     /// Relogs all warnings in an iterator with a context applied, unwrapping
     /// each [`Logger`]. The warnings appear indented beneath the context.
     #[inline]
-    fn log_warnings_with_context<S, T, W: Warnings, C: Display>(
+    fn log_warnings_with_context<S, T, W: Warnings, V: Warnings, C: Display>(
         self,
         logger: &Logger<S, W>,
         context: impl Fn() -> C,
-    ) -> Map<Self, impl FnMut(Logger<T, W>) -> T>
+    ) -> Map<Self, impl FnMut(Logger<T, V>) -> T>
     where
-        Self: Sized + Iterator<Item = Logger<T, W>>,
+        Self: Sized + Iterator<Item = Logger<T, V>>,
     {
         self.into_iter()
             .map(move |item| item.relog_with_context(&context, logger))
