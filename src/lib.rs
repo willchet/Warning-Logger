@@ -495,23 +495,23 @@ impl<I, T, W> LogWarnings for I where I: Iterator<Item = Logger<T, W>> {}
 
 /// A fallible version of [`FromIterator`], where any item that fails generates
 /// a warning in the [`Logger`].
-pub trait FromIteratorWithWarnings<A>: Sized {
+pub trait FromIteratorWithWarnings<A, W>: Sized {
     /// Builds a collection from an iterator, where processing of each item may
     /// fail. Any failed items generate a warning in the [`Logger`].
     #[must_use]
-    fn from_iter_with_warnings<T: IntoIterator<Item = A>, W>(iter: T) -> Logger<Self, W>;
+    fn from_iter_with_warnings<T: IntoIterator<Item = A>>(iter: T) -> Logger<Self, W>;
 }
 
 /// A fallible version of [`collect`]. See [`FromIteratorWithWarnings`] for more
 /// details.
 ///
 /// [`collect`]: std::iter::Iterator::collect
-pub trait CollectWithWarning<T>: Iterator<Item = T> {
+pub trait CollectWithWarning<T, W>: Iterator<Item = T> {
     /// Builds a collection from an iterator, where processing of each item may
     /// fail. Any failed items generate a warning in the [`Logger`].
     #[inline]
     #[must_use]
-    fn collect_with_warnings<B: FromIteratorWithWarnings<T>, W>(self) -> Logger<B, W>
+    fn collect_with_warnings<B: FromIteratorWithWarnings<T, W>>(self) -> Logger<B, W>
     where
         Self: Sized,
     {
@@ -519,7 +519,7 @@ pub trait CollectWithWarning<T>: Iterator<Item = T> {
     }
 }
 
-impl<T, I: Iterator<Item = T>> CollectWithWarning<T> for I {}
+impl<T, I: Iterator<Item = T>, W: Warnings> CollectWithWarning<T, W> for I {}
 
 // pub struct Logger<T>(LoggerBase<T, Rc<RefCell<Vec<String>>>>);
 // pub struct AtomicLogger<T>(LoggerBase<T, Arc<Mutex<Vec<String>>>>);
