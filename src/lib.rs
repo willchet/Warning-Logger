@@ -218,14 +218,8 @@ impl<T, W: Warning> Logger<T, W> {
 
     /// Converts the logger to an error while applying a context. The warnings
     /// appear indented beneath the context.
-    pub fn as_err_with_context<C: Display>(self, context: impl FnOnce() -> C) -> Option<Error> {
-        Some(anyhow!(
-            self.with_context(context)
-                .warnings
-                .take_vec()
-                .into_iter()
-                .next()?
-        ))
+    pub fn as_err_with_context<C: Display>(&self, context: impl FnOnce() -> C) -> Option<Error> {
+        Some(anyhow!(self.with_context_helper(context)?))
     }
 
     /// Unwraps the value of a [`Logger`], taking its warnings and logging them
