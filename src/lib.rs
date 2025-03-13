@@ -1,6 +1,6 @@
 #![feature(iter_intersperse, let_chains)]
 
-use anyhow::{Result, anyhow};
+use anyhow::{Error, Result, anyhow};
 use rayon::iter::ParallelIterator;
 use std::{
     borrow::Borrow,
@@ -214,6 +214,18 @@ impl<T, W: Warning> Logger<T, W> {
             self.warnings = W::new_with(vec![warning]);
         }
         self
+    }
+
+    /// Converts the logger to an error while applying a context. The warnings
+    /// appear indented beneath the context.
+    pub fn as_err_with_context<C: Display>(self, context: impl FnOnce() -> C) -> Option<Error> {
+        Some(anyhow!(
+            self.with_context(context)
+                .warnings
+                .take_vec()
+                .into_iter()
+                .next()?
+        ))
     }
 
     /// Unwraps the value of a [`Logger`], taking its warnings and logging them
