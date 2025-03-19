@@ -4,13 +4,21 @@ use anyhow::{Error, Result, anyhow};
 use rayon::iter::ParallelIterator;
 use std::{
     borrow::Borrow,
-    cell::{Ref, RefCell, RefMut},
     fmt::Display,
     iter::{FilterMap, Map},
-    ops::{Deref, DerefMut},
-    rc::Rc,
-    sync::{Arc, Mutex, MutexGuard, mpsc::Sender},
+    sync::mpsc::Sender,
 };
+
+mod error_ext;
+mod result_ext;
+mod warning;
+mod wrap;
+
+pub use error_ext::*;
+pub use result_ext::*;
+pub use warning::*;
+pub use wrap::*;
+
 #[macro_export]
 macro_rules! context {
     ($msg:expr) => {
@@ -43,94 +51,6 @@ pub(crate) fn print_warning_with_context<E: Display, C: Display>(
     context: impl FnOnce() -> C,
 ) {
     eprintln!("{}", warning_with_context(warning, context));
-}
-
-mod sealed {
-    pub trait Sealed {}
-}
-use sealed::Sealed;
-
-pub trait Warning: Sealed {
-    type BorrowedVec<'a>: Deref<Target = Vec<String>>
-    where
-        Self: 'a;
-    type BorrowedMutVec<'a>: DerefMut<Target = Vec<String>>
-    where
-        Self: 'a;
-
-    fn new() -> Self;
-    fn new_with(warnings: Vec<String>) -> Self;
-    fn borrow_vec(&self) -> Self::BorrowedVec<'_>;
-    fn borrow_mut_vec(&self) -> Self::BorrowedMutVec<'_>;
-    fn take_vec(self) -> Vec<String>;
-}
-
-type BasicWarning = Rc<RefCell<Vec<String>>>;
-
-impl Sealed for BasicWarning {}
-
-impl Warning for BasicWarning {
-    type BorrowedVec<'a> = Ref<'a, Vec<String>>;
-    type BorrowedMutVec<'a> = RefMut<'a, Vec<String>>;
-
-    #[inline]
-    fn new() -> Self {
-        Rc::new(RefCell::new(vec![]))
-    }
-
-    #[inline]
-    fn new_with(warnings: Vec<String>) -> Self {
-        Rc::new(RefCell::new(warnings))
-    }
-
-    #[inline]
-    fn borrow_vec(&self) -> Ref<'_, Vec<String>> {
-        RefCell::borrow(self)
-    }
-
-    #[inline]
-    fn borrow_mut_vec(&self) -> RefMut<'_, Vec<String>> {
-        self.borrow_mut()
-    }
-
-    #[inline]
-    fn take_vec(self) -> Vec<String> {
-        self.take()
-    }
-}
-
-type AtomicWarning = Arc<Mutex<Vec<String>>>;
-
-impl Sealed for AtomicWarning {}
-
-impl Warning for AtomicWarning {
-    type BorrowedVec<'a> = MutexGuard<'a, Vec<String>>;
-    type BorrowedMutVec<'a> = MutexGuard<'a, Vec<String>>;
-
-    #[inline]
-    fn new() -> Self {
-        Arc::new(Mutex::new(vec![]))
-    }
-
-    #[inline]
-    fn new_with(warnings: Vec<String>) -> Self {
-        Arc::new(Mutex::new(warnings))
-    }
-
-    #[inline]
-    fn borrow_vec(&self) -> MutexGuard<'_, Vec<String>> {
-        self.lock().unwrap()
-    }
-
-    #[inline]
-    fn borrow_mut_vec(&self) -> MutexGuard<'_, Vec<String>> {
-        self.lock().unwrap()
-    }
-
-    #[inline]
-    fn take_vec(self) -> Vec<String> {
-        Arc::into_inner(self).unwrap().into_inner().unwrap()
-    }
 }
 
 /// A struct wrapping any type which also holds any number of warnings.
@@ -336,132 +256,6 @@ impl<T, E, W: Warning> LoggerInResult<T, E, W> for Result<Logger<T, W>, E> {
             value: f(log.value),
             warnings: log.warnings,
         })
-    }
-}
-
-/// An extension trait allowing any value to be wrapped into a [`Logger`].
-pub trait LoggingWrap: Sized {
-    /// Wraps the value in a [`Logger`] with no warnings.
-    #[inline]
-    #[must_use]
-    fn wrap<W: Warning>(self) -> Logger<Self, W> {
-        Logger::new(self)
-    }
-
-    #[inline]
-    #[must_use]
-    fn wrap_basic(self) -> Logger<Self> {
-        Logger::new(self)
-    }
-
-    /// Wraps the value in a [`Logger`] with no warnings.
-    #[inline]
-    #[must_use]
-    fn wrap_atomic(self) -> Logger<Self, AtomicWarning> {
-        Logger::new(self)
-    }
-
-    /// Wraps the value in a [`Logger`] with a set of warnings.
-    #[inline]
-    #[must_use]
-    fn wrap_with_warnings<W: Warning, V: Warning>(
-        self,
-        warnings: Logger<(), V>,
-    ) -> Logger<Self, W> {
-        Logger {
-            value: self,
-            warnings: Warning::new_with(warnings.warnings.take_vec()),
-        }
-    }
-
-    /// Wraps the value in a [`Logger`] with a set of warnings.
-    #[inline]
-    #[must_use]
-    fn wrap_with_warnings_basic<W: Warning>(self, warnings: Logger<(), W>) -> Logger<Self> {
-        Logger {
-            value: self,
-            warnings: Warning::new_with(warnings.warnings.take_vec()),
-        }
-    }
-
-    /// Wraps the value in a [`Logger`] with a set of warnings.
-    #[inline]
-    #[must_use]
-    fn wrap_with_warnings_atomic<W: Warning>(
-        self,
-        warnings: Logger<(), W>,
-    ) -> Logger<Self, AtomicWarning> {
-        Logger {
-            value: self,
-            warnings: Warning::new_with(warnings.warnings.take_vec()),
-        }
-    }
-
-    /// Wraps the value in a [`Logger`] with a set of warnings and a context.
-    /// The warnings appear indented beneath the context.
-    #[inline]
-    #[must_use]
-    fn wrap_with_context<C: Display, W: Warning, V: Warning>(
-        self,
-        context: impl FnOnce() -> C,
-        warnings: Logger<(), V>,
-    ) -> Logger<Self, W> {
-        let warnings = warnings.with_context(context).warnings;
-        Logger {
-            value: self,
-            warnings: Warning::new_with(warnings.take_vec()),
-        }
-    }
-
-    #[inline]
-    #[must_use]
-    fn wrap_with_context_basic<C: Display, W: Warning>(
-        self,
-        context: impl FnOnce() -> C,
-        warnings: Logger<(), W>,
-    ) -> Logger<Self> {
-        let warnings = warnings.with_context(context).warnings;
-        Logger {
-            value: self,
-            warnings: Warning::new_with(warnings.take_vec()),
-        }
-    }
-
-    /// Wraps the value in a [`Logger`] with a set of warnings and a context.
-    /// The warnings appear indented beneath the context.
-    #[inline]
-    #[must_use]
-    fn wrap_with_context_atomic<C: Display, W: Warning>(
-        self,
-        context: impl FnOnce() -> C,
-        warnings: Logger<(), W>,
-    ) -> Logger<Self, AtomicWarning> {
-        let warnings = warnings.with_context(context).warnings;
-        Logger {
-            value: self,
-            warnings: Warning::new_with(warnings.take_vec()),
-        }
-    }
-}
-
-impl<T> LoggingWrap for T {}
-
-/// An extension trait providing the ability to apply a context to a `Result`
-/// (similar to a [`Logger`]).
-pub trait ResultContext {
-    type T;
-
-    /// Applies a context to a given error. The error becomes indented beneath
-    /// the context.
-    fn err_with_context<C: Display>(self, context: impl FnOnce() -> C) -> Result<Self::T>;
-}
-
-impl<T, E: Display> ResultContext for Result<T, E> {
-    type T = T;
-
-    #[inline]
-    fn err_with_context<C: Display>(self, context: impl FnOnce() -> C) -> Result<Self::T> {
-        self.map_err(|e| anyhow!(warning_with_context(e, context)))
     }
 }
 
@@ -719,7 +513,7 @@ pub trait FromIteratorWithWarnings<A, W>: Sized {
 /// details.
 ///
 /// [`collect`]: std::iter::Iterator::collect
-pub trait CollectWithWarning<T>: Iterator<Item = T> {
+pub trait CollectWithWarnings<T>: Iterator<Item = T> {
     /// Builds a collection from an iterator, where processing of each item may
     /// fail. Any failed items generate a warning in the [`Logger`].
     #[inline]
@@ -743,7 +537,7 @@ pub trait CollectWithWarning<T>: Iterator<Item = T> {
     }
 }
 
-impl<T, I: Iterator<Item = T>> CollectWithWarning<T> for I {}
+impl<T, I: Iterator<Item = T>> CollectWithWarnings<T> for I {}
 
 // pub struct Logger<T>(LoggerBase<T, BasicWarning>);
 // pub struct AtomicLogger<T>(LoggerBase<T, AtomicWarning>);
